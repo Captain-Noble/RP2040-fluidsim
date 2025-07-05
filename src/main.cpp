@@ -8,6 +8,7 @@
 static LGFX_GC9A01 display;  // 显示屏
 static QMI8658C imu;         // 加速度计
 
+<<<<<<< Updated upstream
 // 屏幕逻辑网格定义
 #define LOGICAL_GRID_SIZE_X 24             // 逻辑网格宽度
 #define LOGICAL_GRID_SIZE_Y 24             // 逻辑网格高度
@@ -16,6 +17,12 @@ static QMI8658C imu;         // 加速度计
 #define PARTICLE_RADIUS 0.5f               // 粒子半径，逻辑单位
 #define MIN_DIST (2.0f * PARTICLE_RADIUS)  // 最小允许粒子间距
 #define MIN_DIST2 (MIN_DIST * MIN_DIST)    // 最小间距平方
+=======
+// ─────────────── 帧率 / 物理步长设定 ───────────────
+static unsigned long lastFrameTime = 0;
+static constexpr float TARGET_FPS = 10.0f;
+static constexpr float FIXED_DT = 1.0f / TARGET_FPS;
+>>>>>>> Stashed changes
 
 // 粒子结构，使用 float 存储位置和速度
 struct Particle {
@@ -186,8 +193,59 @@ void setup() {
 }
 
 void loop() {
+<<<<<<< Updated upstream
   updateIMU();            // 更新加速度计数据
   updateParticles(0.1f);  // 更新粒子
   render();               // 绘制结果
   // delay(40);              // 控制帧率
+=======
+  unsigned long nowMs = millis();
+  float deltaTime = (nowMs - lastFrameTime) * 0.001f;
+
+  // ----------- 固定步长物理 -----------
+  static float acc = 0.0f;
+  acc += deltaTime;
+  acc = min(acc, 0.1f);
+
+  while (acc >= FIXED_DT) {
+    unsigned long t0 = micros();
+    sim.simulate(FIXED_DT);
+    physAccumUs += micros() - t0;
+    acc -= FIXED_DT;
+  }
+
+  // ----------- 渲染（格子模式） -----------
+  unsigned long t0 = micros();
+  renderer.render(FluidRenderer::PARTIAL_GRID);
+  rendAccumUs += micros() - t0;
+
+  // --- 叠加 FPS 文本 ---
+  static int fpsFrames = 0;
+  static unsigned long fpsTimer = 0;
+  static float fps = 0.0f;
+
+  ++fpsFrames;
+  if (nowMs - fpsTimer >= 1000) {
+    fps = fpsFrames * 1000.0f / (nowMs - fpsTimer);
+    fpsFrames = 0;
+    fpsTimer = nowMs;
+  }
+  display.startWrite();
+  display.setTextColor(TFT_WHITE, display.color565(0, 0, 16));
+  display.setCursor(5, 5);
+  display.printf("FPS: %.1f", fps);
+  display.endWrite();
+
+  lastFrameTime = nowMs;
+  ++frameCounter;
+
+  // ----------- 每秒串口打印统计 -----------
+  if (nowMs - lastPrintMs >= 1000) {
+    Serial.printf("[FPS %3u] Physics: %.2f ms  |  Render: %.2f ms\r\n",
+                  frameCounter, physAccumUs * 0.001f, rendAccumUs * 0.001f);
+    physAccumUs = rendAccumUs = 0;
+    frameCounter = 0;
+    lastPrintMs = nowMs;
+  }
+>>>>>>> Stashed changes
 }

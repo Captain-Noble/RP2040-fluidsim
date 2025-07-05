@@ -6,6 +6,7 @@
     "random": "cpp",
     "ostream": "cpp",
     "stop_token": "cpp",
-    "streambuf": "cpp"
+    "streambuf": "cpp",
+    "cstdlib": "cpp"
   }
 }
