@@ -1,15 +1,35 @@
 #include "FluidRenderer.hpp"
+#include <Arduino.h>
+#include <math.h>
+#include <string.h>
 
-// 配置参数（可调整以适应不同的渲染效果）
-#define RENDER_PARTICLE_THRESHOLD 3      // 粒子数阈值：液体（每个逻辑格子）
-#define RENDER_RIM_PARTICLE_THRESHOLD 1  // 粒子数阈值：边缘透明（每个逻辑格子）
-#define RENDER_RIM_LIGHT_WIDTH 1         // 老代码：光晕向外扩张曼哈顿半径
-#define RENDER_EDGE_SMOOTH_RADIUS 3      // ★ 新增：closing 卷积半径 (≥1)
-#define RENDER_FOAM_SPEED_THRESHOLD 99.0f  // 泡沫速度阈值
+// 邊框
+#define SHOW_CELL_OUTLINE 1
+#define SHOW_SCREEN_FRAME 0
 
-// 16-bit 565 颜色线性插值
+// ========== 你的渲染參數 ==========
+#define RENDER_PARTICLE_THRESHOLD 3
+#define RENDER_RIM_PARTICLE_THRESHOLD 1
+#define RENDER_EDGE_SMOOTH_RADIUS 3
+#define RENDER_FOAM_SPEED_THRESHOLD 99.0f
+#ifndef PARTICLE_RADIUS
+#define PARTICLE_RADIUS (1.6f / 240.0f)
+#endif
+
+// ========== 搖晃偵測參數（可調） ==========
+// ---------------- 搖晃偵測參數（先放鬆，確認能觸發） ----------------
+#define SHAKE_USE_HIGHPASS 1         // 1=去掉重力（高通）
+#define SHAKE_LP_ALPHA 0.20f         // 低通係數（抓重力）
+#define SHAKE_THR_G 0.35f            // ← 門檻先降，之後再調回 0.8
+#define SHAKE_SAMPLES_HIT 3          // ← 連續樣本數先降，之後再調回 6~10
+#define SHAKE_DOMINANCE_RATIO 1.20f  // ← 主軸優勢比先降，之後再調回 1.4~1.8
+#define SHAKE_COOLDOWN_MS 400
+#define SHAKE_INVERT_X 0
+#define SHAKE_INVERT_Y 0
+#define SHAKE_USE_Z 1  // ← 新增：把 Z 軸也納入判定
+
+// ========== 565 線性插值 ==========
 uint16_t FluidRenderer::lerp565(uint16_t c1, uint16_t c2, float t) const {
-  // clamp t to [0,1]
   if (t < 0.0f)
     t = 0.0f;
   if (t > 1.0f)
@@ -17,75 +37,186 @@ uint16_t FluidRenderer::lerp565(uint16_t c1, uint16_t c2, float t) const {
 
   auto lerp = [t](int a, int b, int bits) -> uint16_t {
     const int mask = (1 << bits) - 1;
-    float v = a + (b - a) * t;  // ① 浮点插值
-    int iv = (int)roundf(v);    // ② 四舍五入取整
-    iv = iv & mask;             // ③ 掩码裁剪
+    float v = a + (b - a) * t;
+    int iv = (int)roundf(v);
+    iv &= mask;
     return (uint16_t)iv;
   };
-
-  uint16_t r = lerp((c1 >> 11) & 0x1F, (c2 >> 11) & 0x1F, 5);  // 5 bits
-  uint16_t g = lerp((c1 >> 5) & 0x3F, (c2 >> 5) & 0x3F, 6);    // 6 bits
-  uint16_t b = lerp(c1 & 0x1F, c2 & 0x1F, 5);                  // 5 bits
-
-  return (r << 11) | (g << 5) | b;
+  uint16_t r = lerp((c1 >> 11) & 0x1F, (c2 >> 11) & 0x1F, 5);
+  uint16_t g = lerp((c1 >> 5) & 0x3F, (c2 >> 5) & 0x3F, 6);
+  uint16_t b = lerp(c1 & 0x1F, c2 & 0x1F, 5);
+  return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
-// 获取流体类型对应的颜色
-uint16_t FluidRenderer::getFluidColor(RenderFluidType type) const {
-  switch (type) {
-    case RENDER_FLUID_LIQUID:
-      return m_disp->color565(0, 240, 255);
-    case RENDER_FLUID_FOAM:
-      return m_disp->color565(200, 200, 230);
-    case RENDER_FLUID_RIM_TRANSPARENT:
-      return m_disp->color565(0, 120, 255);
-    case RENDER_FLUID_RIM_LIGHT:
-      return m_disp->color565(0, 10, 230);
-    default:  // RENDER_FLUID_EMPTY
-      return m_disp->color565(0, 0, 0);
+// ========== 動態顏色表：依搖晃方向套用主題 ==========
+void FluidRenderer::applyPaletteForDir(ShakeDir d) {
+  switch (d) {
+    case SHAKE_LEFT:  // 冷藍
+      pal_liquid = lgfx::color565(0, 220, 255);
+      pal_foam = lgfx::color565(220, 240, 255);
+      pal_rimTrans = lgfx::color565(0, 140, 255);
+      pal_rimLight = lgfx::color565(0, 50, 230);
+      break;
+    case SHAKE_RIGHT:  // 熱紅
+      pal_liquid = lgfx::color565(255, 100, 60);
+      pal_foam = lgfx::color565(255, 220, 200);
+      pal_rimTrans = lgfx::color565(255, 140, 100);
+      pal_rimLight = lgfx::color565(220, 60, 40);
+      break;
+    case SHAKE_UP:  // 綠青
+      pal_liquid = lgfx::color565(20, 230, 160);
+      pal_foam = lgfx::color565(210, 255, 230);
+      pal_rimTrans = lgfx::color565(40, 180, 150);
+      pal_rimLight = lgfx::color565(10, 120, 110);
+      break;
+    case SHAKE_DOWN:  // 紫色
+      pal_liquid = lgfx::color565(160, 80, 255);
+      pal_foam = lgfx::color565(235, 220, 255);
+      pal_rimTrans = lgfx::color565(130, 60, 220);
+      pal_rimLight = lgfx::color565(90, 30, 200);
+      break;
+    default:  // 預設（沿用舊設定）
+      pal_liquid = m_gridFluid;
+      pal_foam = m_gridFoam;
+      pal_rimTrans = lgfx::color565(0, 120, 255);
+      pal_rimLight = lgfx::color565(0, 10, 230);
+      break;
+  }
+  paletteDirty = true;
+}
+
+void FluidRenderer::setTheme(ShakeDir d) {
+  applyPaletteForDir(d);
+}
+
+void FluidRenderer::setBasePalette(uint16_t liquid,
+                                   uint16_t foam,
+                                   uint16_t rimTrans,
+                                   uint16_t rimLight) {
+  pal_liquid = liquid;
+  pal_foam = foam;
+  pal_rimTrans = rimTrans;
+  pal_rimLight = rimLight;
+  paletteDirty = true;
+}
+
+// ========== 搖晃偵測：每筆加速度（g）丟進來 ==========
+void FluidRenderer::onAccelSample(float ax_g, float ay_g, float az_g) {
+#if SHAKE_USE_HIGHPASS
+  // 抓重力 (低通) 並做高通
+  lp_ax = (1.0f - SHAKE_LP_ALPHA) * lp_ax + SHAKE_LP_ALPHA * ax_g;
+  lp_ay = (1.0f - SHAKE_LP_ALPHA) * lp_ay + SHAKE_LP_ALPHA * ay_g;
+  lp_az = (1.0f - SHAKE_LP_ALPHA) * lp_az + SHAKE_LP_ALPHA * az_g;
+  float hx = ax_g - lp_ax;
+  float hy = ay_g - lp_ay;
+  float hz = az_g - lp_az;
+#else
+  float hx = ax_g, hy = ay_g, hz = az_g;
+#endif
+
+#if SHAKE_INVERT_X
+  hx = -hx;
+#endif
+#if SHAKE_INVERT_Y
+  hy = -hy;
+#endif
+
+  // 三軸絕對值
+  float vx[3] = {fabsf(hx), fabsf(hy), fabsf(hz)};
+  // 找到最大 (primary) 與次大 (second) 值及其軸
+  uint8_t primary_axis = 0;
+  if (vx[1] > vx[primary_axis])
+    primary_axis = 1;
+  if (vx[2] > vx[primary_axis])
+    primary_axis = 2;
+
+  float primary = vx[primary_axis];
+  // 求次大（從剩下兩個取 max）
+  float second = (primary_axis == 0)   ? fmaxf(vx[1], vx[2])
+                 : (primary_axis == 1) ? fmaxf(vx[0], vx[2])
+                                       : fmaxf(vx[0], vx[1]);
+
+  // 條件：主軸強度達標 + 主軸相對其他軸夠「主」
+  bool strong = (primary >= SHAKE_THR_G) &&
+                (second < 1e-6f || (primary / second >= SHAKE_DOMINANCE_RATIO));
+
+  if (strong) {
+    ShakeDir now = SHAKE_NONE;
+    if (primary_axis == 0)
+      now = (hx > 0) ? SHAKE_RIGHT : SHAKE_LEFT;  // X
+    else if (primary_axis == 1)
+      now = (hy > 0) ? SHAKE_UP : SHAKE_DOWN;  // Y
+    else {  // Z 軸：映射到 UP/DOWN（你也可以自定成別的兩組主題色）
+#if SHAKE_USE_Z
+      now = (hz > 0) ? SHAKE_UP : SHAKE_DOWN;
+#else
+      now = SHAKE_NONE;
+#endif
+    }
+
+    if (now == lastDir)
+      ++hitCount;
+    else {
+      lastDir = now;
+      hitCount = 1;
+    }
+  } else {
+    hitCount = 0;
+  }
+
+  uint32_t nowMs = millis();
+  if (hitCount >= (uint16_t)SHAKE_SAMPLES_HIT &&
+      (uint32_t)(nowMs - lastFireMs) >= (uint32_t)SHAKE_COOLDOWN_MS) {
+    applyPaletteForDir(lastDir);
+    lastFireMs = nowMs;
+    hitCount = 0;
   }
 }
 
-// 检查模拟网格中的固体单元（坐标转换）
-// ─────────────────────────────────────────────
-// 根据圆形容器方程判断渲染网格单元是否为 Solid
-// 与模拟端 initGrid() 使用同一半径：rad = 0.5 - CELL
-// ─────────────────────────────────────────────
+// ========== 取得顏色（優先用動態調色盤） ==========
+uint16_t FluidRenderer::getFluidColor(RenderFluidType type) const {
+  // 首次使用時初始化預設主題
+  if (pal_liquid == 0 && pal_foam == 0 && pal_rimTrans == 0 &&
+      pal_rimLight == 0) {
+    const_cast<FluidRenderer*>(this)->applyPaletteForDir(SHAKE_NONE);
+  }
+  switch (type) {
+    case RENDER_FLUID_LIQUID:
+      return pal_liquid;
+    case RENDER_FLUID_FOAM:
+      return pal_foam;
+    case RENDER_FLUID_RIM_TRANSPARENT:
+      return pal_rimTrans ? pal_rimTrans : lgfx::color565(0, 120, 255);
+    case RENDER_FLUID_RIM_LIGHT:
+      return pal_rimLight ? pal_rimLight : lgfx::color565(0, 10, 230);
+    default:
+      return lgfx::color565(0, 0, 0);
+  }
+}
+
+// ========== 幾何：該格是否在容器外（Solid） ==========
 bool FluidRenderer::isSimSolid(int renderGx, int renderGy) const {
-  // 渲染网格单元中心在 [0,1] 归一化坐标系中的位置
-  const float cell = 1.0f / m_renderGridSize;        // 渲染网格单元尺寸
-  const float cx = (renderGx + 0.5f) * cell - 0.5f;  // 相对圆心 x
-  const float cy = (renderGy + 0.5f) * cell - 0.5f;  // 相对圆心 y
-
-  // 与模拟端一致的圆容器半径（使用模拟 CELL，保持几何一致性）
+  const float cell = 1.0f / m_renderGridSize;
+  const float cx = (renderGx + 0.5f) * cell - 0.5f;
+  const float cy = (renderGy + 0.5f) * cell - 0.5f;
   constexpr float rad = 0.5f - ParticleSimulation::CELL;
-
-  // 圆外 ⇒ Solid
   return (cx * cx + cy * cy) > (rad * rad);
 }
 
-/******************************************************************
- * FluidRenderer::updateFluidCells() -- 卷积-Closing 平滑液面边缘
- *   ① 统计半径覆盖 → 基础分类
- *   ② 形态学 closing(膨胀→腐蚀)  → 填平凹洞 / 削细尖
- *   ③ 新生成的填充格设为 RENDER_FLUID_RIM_LIGHT
- ******************************************************************/
-
+// ========== 更新每格流體狀態（含 closing 平滑） ==========
 void FluidRenderer::updateFluidCells() {
   const int GS = m_renderGridSize;
   const int GC = GS * GS;
   const float CELL = 1.0f / GS;
 
-  /* 0️⃣ 备份上一帧状态 */
   memcpy(m_prevFluid, m_currFluid, GC * sizeof(RenderFluidType));
 
-  /* 1️⃣ 统计粒子覆盖半径：cnt[] / acc[] ------------------------- */
   static uint16_t cnt[MAX_GRID_CELLS];
   static float acc[MAX_GRID_CELLS];
   memset(cnt, 0, GC * sizeof(uint16_t));
   memset(acc, 0, GC * sizeof(float));
 
-  const float r = PARTICLE_RADIUS;  // 归一化半径
+  const float r = PARTICLE_RADIUS;
   const float r2 = r * r;
 
   const Particle* P = m_sim->data();
@@ -114,11 +245,10 @@ void FluidRenderer::updateFluidCells() {
       }
   }
 
-  /* 2️⃣ 基础分类 (Liquid / RimTransparent / Empty / Foam) -------- */
+  // 基本分類
   for (int id = 0; id < GC; ++id) {
     const float n = cnt[id];
     const float v = n ? acc[id] / n : 0.f;
-
     if (n >= RENDER_PARTICLE_THRESHOLD)
       m_currFluid[id] = (v > RENDER_FOAM_SPEED_THRESHOLD) ? RENDER_FLUID_FOAM
                                                           : RENDER_FLUID_LIQUID;
@@ -128,15 +258,13 @@ void FluidRenderer::updateFluidCells() {
       m_currFluid[id] = RENDER_FLUID_EMPTY;
   }
 
-  /* 3️⃣ 原有「邻域包边」卷积：EMPTY → Rim* ------------------------ */
+  // 簡單包邊（近鄰轉換）
   memcpy(m_convTmp, m_currFluid, GC * sizeof(RenderFluidType));
-
   auto neighborFilled = [&](int id) -> bool {
     return (m_currFluid[id] == RENDER_FLUID_RIM_TRANSPARENT) ||
            (m_currFluid[id] == RENDER_FLUID_LIQUID) ||
            (m_currFluid[id] == RENDER_FLUID_FOAM);
   };
-
   for (int gx = 0; gx < GS; ++gx)
     for (int gy = 0; gy < GS; ++gy) {
       int id = idx(gx, gy);
@@ -147,16 +275,15 @@ void FluidRenderer::updateFluidCells() {
       for (int dx = -1; dx <= 1 && touch < 4; ++dx)
         for (int dy = -1; dy <= 1 && touch < 4; ++dy) {
           if (!dx && !dy)
-            continue;  // 自身
+            continue;
           if (dx && dy)
-            continue;  // 只看 4 邻域
+            continue;  // 4-neigh
           int nx = gx + dx, ny = gy + dy;
           if (nx < 0 || nx >= GS || ny < 0 || ny >= GS)
             continue;
           if (neighborFilled(idx(nx, ny)))
             ++touch;
         }
-
       if (touch >= 4)
         m_convTmp[id] = RENDER_FLUID_LIQUID;
       else if (touch >= 2)
@@ -164,18 +291,14 @@ void FluidRenderer::updateFluidCells() {
       else if (touch >= 1)
         m_convTmp[id] = RENDER_FLUID_RIM_LIGHT;
     }
-
-  /* --- 把包边结果写回作为 closing 的初始基准 -------------------- */
   memcpy(m_currFluid, m_convTmp, GC * sizeof(RenderFluidType));
 
-  /* 4️⃣ Closing(膨胀→腐蚀) 平滑液面 ------------------------------ */
-  const int R = RENDER_EDGE_SMOOTH_RADIUS;  // 卷积半径
-
+  // Closing：dilation -> erosion（以曼哈頓半徑）
+  const int R = RENDER_EDGE_SMOOTH_RADIUS;
   static uint8_t mask[MAX_GRID_CELLS];
   static uint8_t dilate[MAX_GRID_CELLS];
-  static uint8_t close[MAX_GRID_CELLS];
+  static uint8_t closeB[MAX_GRID_CELLS];
 
-  /* 4-A 生成二值掩码（液面/泡沫/透明边缘 = 1） */
   for (int i = 0; i < GC; ++i)
     mask[i] = (m_currFluid[i] == RENDER_FLUID_LIQUID ||
                m_currFluid[i] == RENDER_FLUID_FOAM ||
@@ -183,7 +306,6 @@ void FluidRenderer::updateFluidCells() {
                   ? 1
                   : 0;
 
-  /* 4-B 膨胀 dilation */
   memset(dilate, 0, GC);
   for (int gx = 0; gx < GS; ++gx)
     for (int gy = 0; gy < GS; ++gy) {
@@ -192,7 +314,7 @@ void FluidRenderer::updateFluidCells() {
       for (int dx = -R; dx <= R; ++dx)
         for (int dy = -R; dy <= R; ++dy) {
           if (abs(dx) + abs(dy) > R)
-            continue;  // 曼哈顿邻域
+            continue;
           int nx = gx + dx, ny = gy + dy;
           if (nx < 0 || nx >= GS || ny < 0 || ny >= GS)
             continue;
@@ -200,8 +322,7 @@ void FluidRenderer::updateFluidCells() {
         }
     }
 
-  /* 4-C 腐蚀 erosion */
-  memset(close, 0, GC);
+  memset(closeB, 0, GC);
   for (int gx = 0; gx < GS; ++gx)
     for (int gy = 0; gy < GS; ++gy) {
       bool all = true;
@@ -213,48 +334,65 @@ void FluidRenderer::updateFluidCells() {
           if (nx < 0 || nx >= GS || ny < 0 || ny >= GS || !dilate[idx(nx, ny)])
             all = false;
         }
-      close[idx(gx, gy)] = all ? 1 : 0;
+      closeB[idx(gx, gy)] = all ? 1 : 0;
     }
 
-  /* 4-D 新填补的 EMPTY → RIM_LIGHT */
   for (int i = 0; i < GC; ++i)
-    if (close[i] && !mask[i] && m_currFluid[i] == RENDER_FLUID_EMPTY)
+    if (closeB[i] && !mask[i] && m_currFluid[i] == RENDER_FLUID_EMPTY)
       m_currFluid[i] = RENDER_FLUID_RIM_LIGHT;
 
-  /* 5️⃣ 生成变化列表 --------------------------------------------- */
+  // 紀錄變動索引
   m_changedCnt = 0;
   for (int i = 0; i < GC; ++i)
     if (m_currFluid[i] != m_prevFluid[i])
       m_changedIdx[m_changedCnt++] = i;
 }
-// ------------------ 公共接口 ------------------
 
+// ========== 渲染主控 ==========
 void FluidRenderer::render(Mode mode) {
   m_disp->startWrite();
-  switch (mode) {
-    case BALLS:
-      renderBalls();
-      break;
-    case GRID:
-      renderGrid();
-      break;
-    case PARTIAL_GRID:
-      // 先更新状态，再渲染变化部分
-      updateFluidCells();
-      renderPartialGrid();
-      break;
+
+  // 若剛換色且是 PARTIAL 模式，保險起見先整畫一次
+  bool forcedFull = false;
+  if (paletteDirty && mode == PARTIAL_GRID) {
+    updateFluidCells();
+    renderGrid();
+    paletteDirty = false;
+    forcedFull = true;
   }
+
+  if (!forcedFull) {
+    switch (mode) {
+      case BALLS:
+        renderBalls();
+        break;
+      case GRID:
+        updateFluidCells();
+        renderGrid();
+        paletteDirty = false;
+        break;
+      case PARTIAL_GRID:
+        updateFluidCells();
+        renderPartialGrid();
+        paletteDirty = false;
+        break;
+      case PARTIAL_BALLS:  // 這裡直接當作 BALLS 全畫
+        renderBalls();
+        paletteDirty = false;
+        break;
+    }
+  }
+
   m_disp->endWrite();
 }
 
+// ========== Balls 模式 ==========
 void FluidRenderer::renderBalls() {
-  // 1. 背景
-  m_disp->fillScreen(m_disp->color565(0, 0, 0));
-
-  // 2. 容器边框
+  // m_disp->fillScreen(lgfx::color565(0, 0, 0));
+#if SHOW_SCREEN_FRAME
   m_disp->drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, TFT_WHITE);
+#endif
 
-  // 3. 画每个粒子
   const Particle* P = m_sim->data();
   const int N = m_sim->particleCount();
   const int radius = (int)(m_renderCellSize * PARTICLE_RADIUS);
@@ -263,72 +401,61 @@ void FluidRenderer::renderBalls() {
     int sx = (int)(P[i].x * SCREEN_WIDTH);
     int sy = (int)(P[i].y * SCREEN_HEIGHT);
 
-    // 速度映射到颜色
     float speed = sqrtf(P[i].vx * P[i].vx + P[i].vy * P[i].vy);
     float t = constrain(speed / 8.0f, 0.0f, 1.0f);
     uint16_t c = lerp565(m_ballBase, TFT_WHITE, t);
 
     m_disp->fillCircle(sx, sy, radius, c);
-    m_disp->drawCircle(sx, sy, radius, TFT_NAVY);  // 细圈
+    m_disp->drawCircle(sx, sy, radius, TFT_NAVY);
   }
 }
 
+// ========== Grid (全畫) ==========
 void FluidRenderer::renderGrid() {
-  // 1. 先更新状态
-  updateFluidCells();
+  // m_disp->fillScreen(lgfx::color565(0, 0, 0));
 
-  // 2. 先清屏
-  m_disp->fillScreen(m_disp->color565(0, 0, 0));
-
-  // 3. 逐格绘制
   for (int gx = 0; gx < m_renderGridSize; ++gx) {
     for (int gy = 0; gy < m_renderGridSize; ++gy) {
       int px = gx * m_renderCellSize;
       int py = gy * m_renderCellSize;
 
       uint16_t color;
-
       if (isSimSolid(gx, gy)) {
-        color = m_gridSolid;  // 墙
+        // color = m_gridSolid;
+        continue;
       } else {
-        // 读取当前帧流体状态
         RenderFluidType ft = m_currFluid[idx(gx, gy)];
         color = getFluidColor(ft);
       }
 
       m_disp->fillRect(px, py, m_renderCellSize, m_renderCellSize, color);
-
-      // （可选）描边
+#if SHOW_CELL_OUTLINE
       m_disp->drawRect(px, py, m_renderCellSize, m_renderCellSize,
-                       m_disp->color565(10, 10, 20));
+                       lgfx::color565(10, 10, 20));
+#endif
     }
   }
 }
 
+// ========== Partial Grid（只畫變動格） ==========
 void FluidRenderer::renderPartialGrid() {
-  // 注意：updateFluidCells() 已在 render() 中调用
-
-  // 统计并打印
-  // Serial.printf("Changed cells this frame: %d\n", m_changedCnt);
-
   for (int n = 0; n < m_changedCnt; ++n) {
-    int idx = m_changedIdx[n];
-    int gx = idx / m_renderGridSize;
-    int gy = idx % m_renderGridSize;
+    int id = m_changedIdx[n];
+    int gx = id / m_renderGridSize;
+    int gy = id % m_renderGridSize;
 
     if (isSimSolid(gx, gy))
-      continue;  // 固体不用重画
+      continue;
 
-    // 像素坐标
     int px = gx * m_renderCellSize;
     int py = gy * m_renderCellSize;
 
-    // 颜色
-    uint16_t color = getFluidColor(m_currFluid[idx]);
+    uint16_t color = getFluidColor(m_currFluid[id]);
 
-    // 绘制
     m_disp->fillRect(px, py, m_renderCellSize, m_renderCellSize, color);
+#if SHOW_CELL_OUTLINE
     m_disp->drawRect(px, py, m_renderCellSize, m_renderCellSize,
-                     m_disp->color565(10, 10, 20));
+                     lgfx::color565(10, 10, 20));
+#endif
   }
 }

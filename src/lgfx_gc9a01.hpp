@@ -2,10 +2,9 @@
 
 #include <LovyanGFX.h>
 
-#define GRID_SIZE_X 12    // 网格分辨率 X
-#define GRID_SIZE_Y 12    // 网格分辨率 Y
-#define NUM_PARTICLES 30  // 粒子数量
-#define CELL_SIZE 20      // 每个网格单元的尺寸（像素）
+#define GRID_SIZE_X 12  // 网格分辨率 X
+#define GRID_SIZE_Y 12  // 网格分辨率 Y
+#define CELL_SIZE 20    // 每个网格单元的尺寸（像素）
 #define TFT_GRAY TFT_DARKGRAY
 
 // 流体网格类型
