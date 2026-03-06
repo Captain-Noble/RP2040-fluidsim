@@ -10,6 +10,7 @@
             "includePath": [
                 "d:/ShanghaiTech/github/RP2040-fluidsim/include",
                 "d:/ShanghaiTech/github/RP2040-fluidsim/src",
+                "d:/ShanghaiTech/github/RP2040-fluidsim/lib/LowPower",
                 "d:/ShanghaiTech/github/RP2040-fluidsim/lib/FluidRenderer",
                 "d:/ShanghaiTech/github/RP2040-fluidsim/lib/ParticleSimulation",
                 "d:/ShanghaiTech/github/RP2040-fluidsim/lib/qmc8658c",
@@ -98,7 +99,6 @@
                 "C:/Users/Administrator/.platformio/packages/framework-arduinopico/pico-sdk/lib/lwip/src/include",
                 "C:/Users/Administrator/.platformio/packages/framework-arduinopico/include",
                 "C:/Users/Administrator/.platformio/packages/framework-arduinopico/variants/waveshare_rp2040_lcd_1_28",
-                "d:/ShanghaiTech/github/RP2040-fluidsim/lib/LowPower",
                 "C:/Users/Administrator/.platformio/packages/framework-arduinopico/libraries/ADCInput/src",
                 "C:/Users/Administrator/.platformio/packages/framework-arduinopico/libraries/ArduinoOTA/src",
                 "C:/Users/Administrator/.platformio/packages/framework-arduinopico/libraries/AsyncUDP/src",
@@ -173,6 +173,7 @@
                 "path": [
                     "d:/ShanghaiTech/github/RP2040-fluidsim/include",
                     "d:/ShanghaiTech/github/RP2040-fluidsim/src",
+                    "d:/ShanghaiTech/github/RP2040-fluidsim/lib/LowPower",
                     "d:/ShanghaiTech/github/RP2040-fluidsim/lib/FluidRenderer",
                     "d:/ShanghaiTech/github/RP2040-fluidsim/lib/ParticleSimulation",
                     "d:/ShanghaiTech/github/RP2040-fluidsim/lib/qmc8658c",
@@ -261,7 +262,6 @@
                     "C:/Users/Administrator/.platformio/packages/framework-arduinopico/pico-sdk/lib/lwip/src/include",
                     "C:/Users/Administrator/.platformio/packages/framework-arduinopico/include",
                     "C:/Users/Administrator/.platformio/packages/framework-arduinopico/variants/waveshare_rp2040_lcd_1_28",
-                    "d:/ShanghaiTech/github/RP2040-fluidsim/lib/LowPower",
                     "C:/Users/Administrator/.platformio/packages/framework-arduinopico/libraries/ADCInput/src",
                     "C:/Users/Administrator/.platformio/packages/framework-arduinopico/libraries/ArduinoOTA/src",
                     "C:/Users/Administrator/.platformio/packages/framework-arduinopico/libraries/AsyncUDP/src",

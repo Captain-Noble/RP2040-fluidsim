@@ -186,7 +186,7 @@ class ArduinoLowPowerRP2040 : public ArduinoLowPowerCommon {
     vreg_set_voltage(
         VREG_VOLTAGE_DEFAULT);  // corresponds to 1.10V, not sure if
                                 // that is really required for 48 MHz
-    if (!set_sys_clock_khz(200 * 1000, false)) {
+    if (!set_sys_clock_khz(240 * 1000, false)) {
       Serial.println("awake clock hz is not correct!");
     }  // Set System clock to 10 MHz,
     delay(timer_update_delay);

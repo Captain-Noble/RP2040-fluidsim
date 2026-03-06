@@ -4,7 +4,12 @@
 
 #define RENDER_GRID_SIZE 48
 #define RENDER_PIXEL_PER_CELL SCREEN_HEIGHT / RENDER_GRID_SIZE
-
+#define DRAW_RECT true
+#define RENDER_PARTICLE_THRESHOLD 3      // 粒子数阈值：液体（每个逻辑格子）
+#define RENDER_RIM_PARTICLE_THRESHOLD 1  // 粒子数阈值：边缘透明（每个逻辑格子）
+#define RENDER_RIM_LIGHT_WIDTH 1         // 老代码：光晕向外扩张曼哈顿半径
+#define RENDER_EDGE_SMOOTH_RADIUS 3      // ★ 新增：closing 卷积半径 (≥1)
+#define RENDER_FOAM_SPEED_THRESHOLD 99.0f  // 泡沫速度阈值
 // 渲染器使用的流体类型定义
 enum RenderFluidType : uint8_t {
   RENDER_FLUID_EMPTY,

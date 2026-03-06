@@ -1,11 +1,6 @@
 #include "FluidRenderer.hpp"
 
 // 配置参数（可调整以适应不同的渲染效果）
-#define RENDER_PARTICLE_THRESHOLD 3      // 粒子数阈值：液体（每个逻辑格子）
-#define RENDER_RIM_PARTICLE_THRESHOLD 1  // 粒子数阈值：边缘透明（每个逻辑格子）
-#define RENDER_RIM_LIGHT_WIDTH 1         // 老代码：光晕向外扩张曼哈顿半径
-#define RENDER_EDGE_SMOOTH_RADIUS 3      // ★ 新增：closing 卷积半径 (≥1)
-#define RENDER_FOAM_SPEED_THRESHOLD 99.0f  // 泡沫速度阈值
 
 // 16-bit 565 颜色线性插值
 uint16_t FluidRenderer::lerp565(uint16_t c1, uint16_t c2, float t) const {
@@ -40,7 +35,7 @@ uint16_t FluidRenderer::getFluidColor(RenderFluidType type) const {
     case RENDER_FLUID_RIM_TRANSPARENT:
       return m_disp->color565(0, 120, 255);
     case RENDER_FLUID_RIM_LIGHT:
-      return m_disp->color565(0, 10, 230);
+      return m_disp->color565(0, 0, 200);
     default:  // RENDER_FLUID_EMPTY
       return m_disp->color565(0, 0, 0);
   }
@@ -299,8 +294,9 @@ void FluidRenderer::renderGrid() {
       m_disp->fillRect(px, py, m_renderCellSize, m_renderCellSize, color);
 
       // （可选）描边
-      m_disp->drawRect(px, py, m_renderCellSize, m_renderCellSize,
-                       m_disp->color565(10, 10, 20));
+      if (DRAW_RECT)
+        m_disp->drawRect(px, py, m_renderCellSize, m_renderCellSize,
+                         m_disp->color565(10, 10, 20));
     }
   }
 }
@@ -328,7 +324,8 @@ void FluidRenderer::renderPartialGrid() {
 
     // 绘制
     m_disp->fillRect(px, py, m_renderCellSize, m_renderCellSize, color);
-    m_disp->drawRect(px, py, m_renderCellSize, m_renderCellSize,
-                     m_disp->color565(10, 10, 20));
+    if (DRAW_RECT && m_currFluid[idx] != RENDER_FLUID_EMPTY)
+      m_disp->drawRect(px, py, m_renderCellSize, m_renderCellSize,
+                       m_disp->color565(0, 0, 200));
   }
 }

@@ -3,13 +3,6 @@
 #include <string.h>
 
 // ──────────────────────────────────────── 工具
-static inline FluidType classifyCell(int n, float v) {
-  if (n < FLUID_PARTICLE_THRESHOLD)
-    return FLUID_EMPTY;
-  if (v > FOAM_SPEED_THRESHOLD)
-    return FLUID_FOAM;
-  return FLUID_LIQUID;
-}
 
 // ──────────────────────────────────────── 初始化
 void ParticleSimulation::begin(QMI8658C* imu) {
@@ -67,6 +60,7 @@ void ParticleSimulation::simulate(float dt) {
 
   /* ───── 阶段 3：粒子推开  ─────────────── */
   pushParticlesApart(SEPARATE_ITERS_P);
+  // pushParticlesApartSpeed(SEPARATE_ITERS_P, dt);
   uint32_t t3 = micros();
 
   /* ───── 阶段 4：粒子 → 网格 (PIC) ─────── */
@@ -168,7 +162,8 @@ void ParticleSimulation::integrateParticles(float dt) {
 
 // ──────────────────────────────────────── Push-Apart
 void ParticleSimulation::pushParticlesApart(int iters) {
-  const float min2 = (2 * PARTICLE_RADIUS) * (2 * PARTICLE_RADIUS);
+  const float min2 =  // PUSH_DIST_MODIFIER * PUSH_DIST_MODIFIER *
+      (2 * PARTICLE_RADIUS) * (2 * PARTICLE_RADIUS);
 
   memset(m_numPartCell, 0, sizeof(m_numPartCell));
   for (int i = 0; i < m_numParticles; ++i) {
@@ -204,7 +199,9 @@ void ParticleSimulation::pushParticlesApart(int iters) {
             float dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy;
             if (d2 > min2 || d2 == 0)
               continue;
-            float d = sqrtf(d2), s = 0.5f * ((2 * PARTICLE_RADIUS) - d) / d;
+            float d = sqrtf(d2),
+                  s =  // PUSH_FORCE_MODIFIER *
+                  0.5f * ((2 * PARTICLE_RADIUS) - d) / d;
             dx *= s;
             dy *= s;
             a.x -= dx;
@@ -237,14 +234,19 @@ void ParticleSimulation::transferVelocities(bool toGrid, float flipRatio) {
 
     for (int p = 0; p < m_numParticles; ++p) {
       Particle& pr = m_particles[p];
-      float fx = (pr.x - dx) * hInv, fy = (pr.y - dy) * hInv;
-      int x0 = floorf(fx), y0 = floorf(fy);
+      float fx = (pr.x - dx) * hInv;
+      float fy = (pr.y - dy) * hInv;
+
+      int x0 = clampIdx(static_cast<int>(floorf(fx)), 0, GS - 1);
+      int y0 = clampIdx(static_cast<int>(floorf(fy)), 0, GS - 1);
       float tx = fx - x0, ty = fy - y0, sx = 1 - tx, sy = 1 - ty;
-      int x1 = x0 + 1 < GS ? x0 + 1 : GS - 1,
-          y1 = y0 + 1 < GS ? y0 + 1 : GS - 1;
+      int x1 = clampIdx(x0 + 1, 0, GS - 1);
+      int y1 = clampIdx(y0 + 1, 0, GS - 1);
       float w0 = sx * sy, w1 = tx * sy, w2 = tx * ty, w3 = sx * ty;
-      int n0 = idx(x0, y0), n1 = idx(x1, y0), n2 = idx(x1, y1),
-          n3 = idx(x0, y1);
+      int n0 = safeIdx(x0, y0);
+      int n1 = safeIdx(x1, y0);
+      int n2 = safeIdx(x1, y1);
+      int n3 = safeIdx(x0, y1);
 
       if (toGrid) {
         float pv = comp ? pr.vy : pr.vx;
@@ -301,7 +303,7 @@ void ParticleSimulation::solveIncompressibility(int iters, float dt) {
 
 void ParticleSimulation::updateFluidCells() {
   /* 0️⃣ 备份上一帧状态 */
-  memcpy(m_prevFluid, m_currFluid, sizeof(m_currFluid));
+  // memcpy(m_prevFluid, m_currFluid, sizeof(m_currFluid));
 
   /* 1️⃣ 统计粒子覆盖半径：cnt[]、acc[] ---------------------------------- */
   static uint16_t cnt[GC];
@@ -319,10 +321,10 @@ void ParticleSimulation::updateFluidCells() {
     const float speed = hypotf(m_particles[p].vx, m_particles[p].vy);
 
     /* —— 找出能被此粒子波及的格子 AABB —— */
-    int gx0 = clampF(int((px - r) * GS), 0, GS - 1);
-    int gy0 = clampF(int((py - r) * GS), 0, GS - 1);
-    int gx1 = clampF(int((px + r) * GS), 0, GS - 1);
-    int gy1 = clampF(int((py + r) * GS), 0, GS - 1);
+    int gx0 = clampIdx(static_cast<int>((px - r) * GS), 0, GS - 1);
+    int gy0 = clampIdx(static_cast<int>((py - r) * GS), 0, GS - 1);
+    int gx1 = clampIdx(static_cast<int>((px + r) * GS), 0, GS - 1);
+    int gy1 = clampIdx(static_cast<int>((py + r) * GS), 0, GS - 1);
 
     for (int gx = gx0; gx <= gx1; ++gx)
       for (int gy = gy0; gy <= gy1; ++gy) {
@@ -332,74 +334,10 @@ void ParticleSimulation::updateFluidCells() {
         float dx = cx - px;
         float dy = cy - py;
         if (dx * dx + dy * dy > r2)
-          continue;  // 超出半径
-
-        int id = idx(gx, gy);
+          continue;                // 超出半径
+        int id = safeIdx(gx, gy);  // 统一使用 safeIdx
         ++cnt[id];
         acc[id] += speed;
       }
-  }
-
-  /* 2️⃣ 基础分类（Liquid / RimTransparent / Empty / Foam） -------------- */
-  for (int id = 0; id < GC; ++id) {
-    const int n = cnt[id];
-    const float v = n ? acc[id] / n : 0.f;
-
-    if (n >= FLUID_PARTICLE_THRESHOLD)
-      m_currFluid[id] = (v > FOAM_SPEED_THRESHOLD) ? FLUID_FOAM : FLUID_LIQUID;
-    else if (n >= FLUID_RIM_PARTICLE_THRESHOLD)
-      m_currFluid[id] = FLUID_RIM_TRANSPARENT;
-    else
-      m_currFluid[id] = FLUID_EMPTY;
-  }
-
-  /* 3️⃣ 卷积：EMPTY → RIM_LIGHT（若邻接液体边缘） */
-  FluidType conv[GC];
-  memcpy(conv, m_currFluid, sizeof(m_currFluid));
-
-  memcpy(convTmp, conv, sizeof(convTmp));  // 保留原状态
-
-  auto neighborFilled = [&](int id) -> bool {
-    return (conv[id] == FLUID_RIM_TRANSPARENT) || (conv[id] == FLUID_LIQUID) ||
-           (conv[id] == FLUID_FOAM);
-  };
-
-  for (int gx = 0; gx < GS; ++gx) {
-    for (int gy = 0; gy < GS; ++gy) {
-      int id = idx(gx, gy);
-      if (conv[id] != FLUID_EMPTY)
-        continue;  // 只有 EMPTY 需要判断
-
-      int touch = 0;
-      for (int dx = -1; dx <= 1 && !touch; ++dx)
-        for (int dy = -1; dy <= 1 && !touch; ++dy) {
-          if (!dx && !dy)
-            continue;  // 跳过自身
-          if (dx && dy)
-            continue;  // 只看上下左右
-          int nx = gx + dx, ny = gy + dy;
-          if (nx < 0 || nx >= GS || ny < 0 || ny >= GS)
-            continue;
-          if (neighborFilled(idx(nx, ny)))
-            ++touch;
-        }
-
-      // 根据触边数量决定亮度等级（写到临时数组 convTmp）
-      if (touch >= 4)
-        convTmp[id] = FLUID_LIQUID;
-      else if (touch >= 2)
-        convTmp[id] = FLUID_RIM_TRANSPARENT;
-      else if (touch >= 1)
-        convTmp[id] = FLUID_RIM_LIGHT;
-    }
-  }
-
-  /* ---------- 4. 写回并生成变化表 ---------- */
-  memcpy(conv, convTmp, sizeof(convTmp));  // 一次性覆盖
-  m_changedCnt = 0;
-  for (int i = 0; i < GC; ++i) {
-    m_currFluid[i] = conv[i];
-    if (m_currFluid[i] != m_prevFluid[i])
-      m_changedIdx[m_changedCnt++] = i;
   }
 }

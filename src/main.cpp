@@ -20,10 +20,11 @@ static ArduinoLowPowerRP2040 lp;  // ★ 低功耗对象
 /* ────── 运行参数 ──────────────────────────── */
 static constexpr float TARGET_FPS = 30.f;
 static constexpr float FIXED_DT = 1.f / TARGET_FPS;
+static constexpr float TIME_MULTIPLIER = 1.0f;
 
 /* ────── 运动检测参数 ──────────────────────── */
 static constexpr float GYRO_EPS = 10.0f;     // Δ阈值
-static constexpr uint32_t STILL_MS = 30000;   // 判静止时间
+static constexpr uint32_t STILL_MS = 30000;  // 判静止时间
 static constexpr uint32_t DETECT_MS = 1000;  // 判静止时间
 
 /* ────── 状态机枚举 ────────────────────────── */
@@ -71,20 +72,31 @@ void setup() {
 }
 
 /* ────── 主循环 ────────────────────────────── */
+
+/* ────── 主循环 ────────────────────────────── */
 void loop() {
+  static uint32_t prevUs = micros();  // 记录上一帧时间（µs）
+  uint32_t nowUs = micros();
+  float dt = (nowUs - prevUs) * 1e-6f;  // → 秒
+  prevUs = nowUs;
+
+  dt *= TIME_MULTIPLIER;  // 若想加速/减速仿真
+  // if (dt > MAX_DT_SECONDS)  // 醒来后第一帧可能太大，做个上限保护
+  //   dt = MAX_DT_SECONDS;
+
   float dG = 0.f;  // 本帧 gyro Δ
 
   switch (state) {
     /* ――― 正常运行 ――― */
     case AppState::RUNNING: {
       /* 物理 & 渲染 */
-      sim.simulate(FIXED_DT);
+      sim.simulate(dt);  // ← 改这里
       renderer.render(FluidRenderer::PARTIAL_GRID);
 
       /* 运动检测 */
       bool moving = gyroMoving(dG);
       if (moving) {
-        stillTimer = millis();  // 重置
+        stillTimer = millis();  // 重置静止计时
       } else if (millis() - stillTimer > STILL_MS) {
         state = AppState::GO_SLEEP;
       }
@@ -93,25 +105,22 @@ void loop() {
 
     /* ――― 进入休眠前的一次性收尾 ――― */
     case AppState::GO_SLEEP: {
-      // display.fillScreen(TFT_BLACK);  // 可选：关闭背光
-      display.setBrightness(0);  // 若驱动支持
+      display.setBrightness(0);
       state = AppState::SLEEP_POLL;
       break;
     }
 
     /* ――― Deep-sleep 轮询 ――― */
     case AppState::SLEEP_POLL: {
-      /* 进入 deep-sleep（约 1 s） */
       lp.sleepFor(DETECT_MS, time_unit_t::ms);
 
-      /* 醒来后只读 gyro 做判断 */
       bool moving = gyroMoving(dG);
       if (moving) {
         stillTimer = millis();
-        state = AppState::RUNNING;   // 恢复正常
-        display.setBrightness(255);  // 恢复背光（如有）
+        state = AppState::RUNNING;
+        display.setBrightness(255);
+        prevUs = micros();  // 重置基准，避免第一帧 dt 过大
       }
-      /* 若仍静止则下一轮 loop() 会再次 lp.sleep() */
       break;
     }
   }

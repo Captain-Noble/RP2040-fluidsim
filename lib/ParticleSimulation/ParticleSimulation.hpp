@@ -12,19 +12,17 @@
 #define SCREEN_HEIGHT 240
 #define PIXEL_PER_CELL (SCREEN_WIDTH / LOGICAL_GRID_SIZE)
 
-#define FLUID_PARTICLE_THRESHOLD 3
-#define FLUID_RIM_PARTICLE_THRESHOLD 1
 #define FOAM_SPEED_THRESHOLD 999.0f / LOGICAL_GRID_SIZE
 #define NUM_PARTICLES 100
-#define PARTICLE_RADIUS 0.45f / LOGICAL_GRID_SIZE  // 归一化单位；≈ 单元半径一半
+#define PARTICLE_RADIUS 0.5f / LOGICAL_GRID_SIZE  // 归一化单位；≈ 单元半径一半
 #define FLUID_DENSITY 1.0f
 #define SOLVER_ITERS_P 1
-#define SEPARATE_ITERS_P 1
-#define FLIP_RATIO 0.6f
+#define SEPARATE_ITERS_P 2
+#define FLIP_RATIO 0.5f
 
 #define GRAVITY_MODIFIER 1
 
-#define REST_N 0.05f
+#define REST_N 0.02f
 #define FRIC_T 0.05f
 
 // ─── 枚举 ─────────────────────────────────────────
@@ -67,9 +65,9 @@ class ParticleSimulation {
   static constexpr int PC_MAX = NUM_PARTICLES;
 
   // 公开流体面板
-  FluidType m_currFluid[GC]{};
-  FluidType m_prevFluid[GC]{};
-  FluidType convTmp[GC];
+  // FluidType m_currFluid[GC]{};
+  // FluidType m_prevFluid[GC]{};
+  // FluidType convTmp[GC];
 
  private:
   // ── 网格字段 ───────────────────────────────
@@ -101,13 +99,25 @@ class ParticleSimulation {
   void updateIMU();
   void integrateParticles(float dt);
   void pushParticlesApart(int iters);
+
   void transferVelocities(bool toGrid, float flipRatio);
   void solveIncompressibility(int iters, float dt);
   void updateFluidCells();
-
   // 工具
   inline int idx(int x, int y) const { return x * GS + y; }
   static inline float clampF(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+  }
+
+  template <typename T>
+  static inline T clampIdx(T v, T lo, T hi) {
+    return (v < lo) ? lo : (v > hi ? hi : v);
+  }
+
+  // 替换旧的 idx 宏 / 函数：先夹取再转一维下标
+  static inline int safeIdx(int x, int y) {
+    x = clampIdx(x, 0, GS - 1);
+    y = clampIdx(y, 0, GS - 1);
+    return x * GS + y;  // ← 与原来 idx 相同的线性展开方式
   }
 };
